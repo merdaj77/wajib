@@ -225,6 +225,12 @@ function send(hw) {
   location.href = 'https://wa.me/' + (hw.p || '') + '?text=' + encodeURIComponent(text);
 }
 
+// Opening a second homework link in a tab that still shows the first one
+// only changes the part after "#", which doesn't reload the page (Safari
+// on iPhone does this). Reload so the new homework shows.
+window.addEventListener('hashchange', () => location.reload());
+window.addEventListener('pageshow', (e) => { if (e.persisted) location.reload(); });
+
 readHomework().then((hw) => {
   render(hw);
   $('form').hidden = false;
