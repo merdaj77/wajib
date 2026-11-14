@@ -95,6 +95,19 @@
     </div>
     <div id="questions"></div>
   </div>
+  <div id="peer" hidden>
+    <div class="cap" id="p-org"></div>
+    <h1 id="p-title"></h1>
+    <div class="cap">جولة تسميع متبادل</div>
+    <div class="card">
+      <div class="q-text">اختر اسمك</div>
+      <select id="p-student"><option value="">— اختر —</option></select>
+      <div class="q-text" id="p-partner" style="margin-top:14px" hidden></div>
+    </div>
+    <div id="p-sent" class="note ok" hidden>
+      فُتح واتساب برسالتك. تأكد أنك ضغطت إرسال هناك.
+    </div>
+  </div>
   <div id="draw" hidden>
     <div class="cap" id="d-org"></div>
     <h1 id="d-title"></h1>
@@ -129,6 +142,10 @@
   code the app reads:
     QE1.<base64url JSON { h: id, s: student index, n: name, a: [answers],
                           t: time sent (ms) }>
+  Peer mode (a round of peer evaluation): { v: 2, m: "p", id, t, o, p,
+  n: [names], f: [for each name, the place of the partner it evaluates] }.
+  The student picks their name and reports with the same QE1 code
+  (a: ["ok"]).
   Draw mode (an oral exam taken far away): { v: 2, m: "d", id, t, o, p,
   n: [student name], k: number of cards, u: [numbers already drawn] }.
   The student picks a number and tells the teacher by WhatsApp; what is on
@@ -166,6 +183,12 @@ async function readHomework() {
   const hw = JSON.parse(new TextDecoder().decode(bytes));
   if (hw.m === 'd') {
     if (!hw.id || !hw.k) throw new Error('bad draw');
+    return hw;
+  }
+  if (hw.m === 'p') {
+    if (!hw.id || !Array.isArray(hw.n) || !Array.isArray(hw.f)) {
+      throw new Error('bad round');
+    }
     return hw;
   }
   if (!hw.id || !Array.isArray(hw.q) || !Array.isArray(hw.n)) {
@@ -343,6 +366,43 @@ function send(hw) {
 window.addEventListener('hashchange', () => location.reload());
 window.addEventListener('pageshow', (e) => { if (e.persisted) location.reload(); });
 
+function renderPeer(r) {
+  document.title = 'تسميع متبادل: ' + r.t;
+  $('p-org').textContent = r.o || '';
+  $('p-title').textContent = r.t;
+  const sel = $('p-student');
+  r.n.forEach((name, i) => sel.append(new Option(name, String(i))));
+  const send = $('send');
+  send.textContent = 'قمت بتقييم زميلي';
+  const update = () => {
+    const i = sel.value === '' ? -1 : +sel.value;
+    const partner = i < 0 ? '' : r.n[r.f[i]];
+    $('p-partner').hidden = i < 0;
+    $('p-partner').textContent = i < 0 ? '' : 'زميلك: ' + partner;
+    send.disabled = i < 0;
+    $('hint').textContent = i < 0
+      ? 'اختر اسمك أولاً'
+      : 'اضغط بعد أن تنتهي من تقييم ' + partner;
+  };
+  sel.addEventListener('change', update);
+  send.addEventListener('click', () => {
+    const i = +sel.value;
+    const code = 'QE1.' + bytesToB64url(new TextEncoder().encode(
+      JSON.stringify({ h: r.id, s: i, n: r.n[i], a: ['ok'], t: Date.now() })));
+    const text = [
+      'أنا ' + r.n[i] + '، قمت بتقييم زميلي ' + r.n[r.f[i]],
+      r.t,
+      '',
+      code,
+    ].join('\n');
+    $('p-sent').hidden = false;
+    location.href = 'https://wa.me/' + (r.p || '') + '?text=' + encodeURIComponent(text);
+  });
+  $('peer').hidden = false;
+  $('bar').hidden = false;
+  update();
+}
+
 function renderDraw(d) {
   document.title = 'سحب بطاقة: ' + d.t;
   $('d-org').textContent = d.o || '';
@@ -375,6 +435,10 @@ function renderDraw(d) {
 readHomework().then((hw) => {
   if (hw.m === 'd') {
     renderDraw(hw);
+    return;
+  }
+  if (hw.m === 'p') {
+    renderPeer(hw);
     return;
   }
   render(hw);
