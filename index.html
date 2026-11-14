@@ -25,7 +25,7 @@
     margin-top: 14px; box-shadow: 0 8px 24px rgba(22, 33, 58, .06);
   }
   .q-num { color: var(--sky); font-weight: 700; font-size: 14px; }
-  .q-text { font-weight: 600; margin: 2px 0 10px; white-space: pre-wrap; }
+  .q-text { font-weight: 600; margin: 2px 0 10px; white-space: pre-wrap; line-height: 2; }
   .ayah { font-size: 21px; line-height: 2.1; margin-bottom: 6px; }
   label.opt {
     display: flex; align-items: center; gap: 10px;
@@ -42,6 +42,14 @@
   }
   textarea { min-height: 110px; resize: vertical; }
   select:focus, textarea:focus { outline: none; border-color: var(--sky); }
+  textarea.fix { margin-top: 10px; min-height: 80px; }
+  input.blank {
+    font: inherit; color: inherit; width: 7em; margin: 0 4px; padding: 2px 8px;
+    border: 0; border-bottom: 2px solid var(--sky); background: var(--sky-soft);
+    border-radius: 8px 8px 0 0; text-align: center;
+    height: 1.7em; line-height: 1.4; vertical-align: baseline;
+  }
+  input.blank:focus { outline: none; background: #fff; }
   .bar {
     position: fixed; inset: auto 0 0 0;
     padding: 18px 16px calc(12px + env(safe-area-inset-bottom));
@@ -93,9 +101,12 @@
   The homework travels inside the link, after "#", so it never reaches the
   server that hosts this page. Link: #j.<base64url JSON> or #z.<base64url
   of raw-deflated JSON>. JSON:
-    { v: 1, id, t: title, o: org line, p: teacher phone (digits),
+    { v: 2, id, t: title, o: org line, p: teacher phone (digits),
       n: [student names],
-      q: [ { k: "m" | "t" | "e", s: question, a?: ayah text, c?: [choices] } ] }
+      q: [ { k: "m" | "t" | "f" | "e", s: question, a?: ayah text,
+             c?: [choices], d?: marks, x?: 1 when a false answer needs a
+             correction, dx?: marks of the correction } ] }
+  A blank of a fill question is "______" in s or a.
   The right answers are never in the link; the teacher's app grades.
   Answers go back as a WhatsApp message ending with a code the app reads:
     QE1.<base64url JSON { h: id, s: student index, n: name, a: [answers] }>
@@ -154,11 +165,37 @@ function choice(name, value, label, onPick) {
   return l;
 }
 
+function pointsLabel(p) {
+  if (p == null) return '';
+  if (p === 1) return 'درجة واحدة';
+  if (p === 2) return 'درجتان';
+  if (Number.isInteger(p) && p >= 3 && p <= 10) return p + ' درجات';
+  return p + ' درجة';
+}
+
+// Text with an input in place of every "______" (a fill question).
+function withBlanks(cls, text) {
+  const box = el('div', cls);
+  text.split(/_{3,}/).forEach((part, i, all) => {
+    box.append(document.createTextNode(part));
+    if (i < all.length - 1) {
+      const inp = document.createElement('input');
+      inp.className = 'blank';
+      inp.type = 'text';
+      inp.autocomplete = 'off';
+      box.append(inp);
+    }
+  });
+  return box;
+}
+
 function render(hw) {
   document.title = 'واجب: ' + hw.t;
   $('org').textContent = hw.o || '';
   $('title').textContent = hw.t;
-  $('meta').textContent = hw.q.length + ' ' + (hw.q.length <= 10 ? 'أسئلة' : 'سؤالاً');
+  const total = hw.q.reduce((a, q) => a + (q.d || 0) + (q.x ? (q.dx || 0) : 0), 0);
+  $('meta').textContent = hw.q.length + ' ' + (hw.q.length <= 10 ? 'أسئلة' : 'سؤالاً')
+    + (hw.v >= 2 ? ' · المجموع ' + total + ' درجة' : '');
 
   const sel = $('student');
   hw.n.forEach((name, i) => sel.append(new Option(name, String(i))));
@@ -168,17 +205,45 @@ function render(hw) {
   hw.q.forEach((q, i) => {
     const card = el('div', 'card');
     card.dataset.k = q.k;
-    card.append(el('div', 'q-num', 'السؤال ' + (i + 1)), el('div', 'q-text', q.s));
+    const pts = q.d == null ? '' : ' · ' + pointsLabel(q.d + (q.x ? (q.dx || 0) : 0));
+    card.append(el('div', 'q-num', 'السؤال ' + (i + 1) + pts));
+    if (q.k === 'f') {
+      if (q.s) card.append(withBlanks('q-text', q.s));
+      if (q.a) {
+        const ay = withBlanks('ayah', q.a);
+        ay.prepend('﴿');
+        ay.append('﴾');
+        card.append(ay);
+      }
+      box.append(card);
+      return;
+    }
+    card.append(el('div', 'q-text', q.s));
     if (q.a) card.append(el('div', 'ayah', '﴿' + q.a + '﴾'));
     const name = 'q' + i;
-    const mark = () => card.querySelectorAll('label.opt').forEach(
-      (l) => l.classList.toggle('on', l.querySelector('input').checked));
+    let fix = null;
+    const mark = () => {
+      card.querySelectorAll('label.opt').forEach(
+        (l) => l.classList.toggle('on', l.querySelector('input').checked));
+      if (fix) {
+        const c = card.querySelector('input:checked');
+        fix.hidden = !(c && c.value === 'خطأ');
+      }
+    };
     if (q.k === 'm') {
       (q.c || []).forEach((c, j) => card.append(choice(name, letters[j], c, mark)));
     } else if (q.k === 't') {
       const row = el('div', 'tf');
       row.append(choice(name, 'صح', 'صح', mark), choice(name, 'خطأ', 'خطأ', mark));
       card.append(row);
+      if (q.x) {
+        card.dataset.fix = '1';
+        fix = document.createElement('textarea');
+        fix.className = 'fix';
+        fix.placeholder = 'صحّح الخطأ: اكتب العبارة الصحيحة';
+        fix.hidden = true;
+        card.append(fix);
+      }
     } else {
       const t = document.createElement('textarea');
       t.name = name;
@@ -189,16 +254,30 @@ function render(hw) {
   });
 }
 
+// Each answer as sent, and whether it is complete.
 function answers() {
   return [...document.querySelectorAll('#questions .card')].map((card) => {
-    if (card.dataset.k === 'e') return card.querySelector('textarea').value.trim();
+    const k = card.dataset.k;
+    if (k === 'e') {
+      const v = card.querySelector('textarea').value.trim();
+      return { v, done: v !== '' };
+    }
+    if (k === 'f') {
+      const words = [...card.querySelectorAll('input.blank')].map((i) => i.value.trim());
+      return { v: words.join('\n'), done: words.every((w) => w !== '') };
+    }
     const c = card.querySelector('input:checked');
-    return c ? c.value : '';
+    const v = c ? c.value : '';
+    if (k === 't' && card.dataset.fix && v === 'خطأ') {
+      const f = card.querySelector('textarea.fix').value.trim();
+      return { v: v + '\n' + f, done: f !== '' };
+    }
+    return { v, done: v !== '' };
   });
 }
 
 function update() {
-  const left = answers().filter((x) => !x).length;
+  const left = answers().filter((x) => !x.done).length;
   const named = $('student').value !== '';
   $('send').disabled = !named || left > 0;
   $('hint').textContent = !named
@@ -210,14 +289,20 @@ function update() {
 
 function send(hw) {
   const s = +$('student').value;
-  const a = answers();
+  const a = answers().map((x) => x.v);
   const code = 'QE1.' + bytesToB64url(new TextEncoder().encode(
     JSON.stringify({ h: hw.id, s, n: hw.n[s], a })));
+  const shown = (x, i) => {
+    const k = hw.q[i].k;
+    if (k === 'f') return x.split('\n').join('، ');
+    if (k === 't') return x.replace('\n', ' — التصحيح: ');
+    return x;
+  };
   const text = [
     'واجب: ' + hw.t,
     'الطالب: ' + hw.n[s],
     '',
-    ...a.map((x, i) => (i + 1) + ') ' + x),
+    ...a.map((x, i) => (i + 1) + ') ' + shown(x, i)),
     '',
     code,
   ].join('\n');
