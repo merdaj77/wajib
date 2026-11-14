@@ -66,6 +66,12 @@
   .note.red { background: var(--red-soft); color: var(--red); }
   .note.ok { background: var(--turq-soft); color: var(--turq-ink); }
   [hidden] { display: none !important; }
+  .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 16px; }
+  .grid button {
+    aspect-ratio: 1; border: 0; border-radius: 18px; font: inherit; font-size: 24px;
+    font-weight: 700; color: #fff; background: #F28C28; cursor: pointer;
+  }
+  .grid button:disabled { background: var(--line); color: var(--mute); cursor: default; }
 </style>
 </head>
 <body>
@@ -89,6 +95,17 @@
     </div>
     <div id="questions"></div>
   </div>
+  <div id="draw" hidden>
+    <div class="cap" id="d-org"></div>
+    <h1 id="d-title"></h1>
+    <div class="cap" id="d-name"></div>
+    <div class="card">
+      <div class="q-text">اختر رقم بطاقتك</div>
+      <div class="hint" style="text-align:start">لا أحد يعرف ما على البطاقات. الأرقام الباهتة اختارها زملاؤك.</div>
+      <div class="grid" id="grid"></div>
+    </div>
+    <div id="d-sent" class="note ok" hidden></div>
+  </div>
 </main>
 
 <div class="bar" id="bar" hidden>
@@ -107,9 +124,15 @@
              c?: [choices], d?: marks, x?: 1 when a false answer needs a
              correction, dx?: marks of the correction } ] }
   A blank of a fill question is "______" in s or a.
-  The right answers are never in the link; the teacher's app grades.
-  Answers go back as a WhatsApp message ending with a code the app reads:
-    QE1.<base64url JSON { h: id, s: student index, n: name, a: [answers] }>
+  e: 1 marks a written exam. The right answers are never in the link; the
+  teacher's app grades. Answers go back as a WhatsApp message ending with a
+  code the app reads:
+    QE1.<base64url JSON { h: id, s: student index, n: name, a: [answers],
+                          t: time sent (ms) }>
+  Draw mode (an oral exam taken far away): { v: 2, m: "d", id, t, o, p,
+  n: [student name], k: number of cards, u: [numbers already drawn] }.
+  The student picks a number and tells the teacher by WhatsApp; what is on
+  the cards stays in the teacher's app.
 */
 const $ = (id) => document.getElementById(id);
 
@@ -141,6 +164,10 @@ async function readHomework() {
     throw new Error('unknown link');
   }
   const hw = JSON.parse(new TextDecoder().decode(bytes));
+  if (hw.m === 'd') {
+    if (!hw.id || !hw.k) throw new Error('bad draw');
+    return hw;
+  }
   if (!hw.id || !Array.isArray(hw.q) || !Array.isArray(hw.n)) {
     throw new Error('bad homework');
   }
@@ -190,7 +217,7 @@ function withBlanks(cls, text) {
 }
 
 function render(hw) {
-  document.title = 'واجب: ' + hw.t;
+  document.title = (hw.e ? 'اختبار: ' : 'واجب: ') + hw.t;
   $('org').textContent = hw.o || '';
   $('title').textContent = hw.t;
   const total = hw.q.reduce((a, q) => a + (q.d || 0) + (q.x ? (q.dx || 0) : 0), 0);
@@ -291,7 +318,7 @@ function send(hw) {
   const s = +$('student').value;
   const a = answers().map((x) => x.v);
   const code = 'QE1.' + bytesToB64url(new TextEncoder().encode(
-    JSON.stringify({ h: hw.id, s, n: hw.n[s], a })));
+    JSON.stringify({ h: hw.id, s, n: hw.n[s], a, t: Date.now() })));
   const shown = (x, i) => {
     const k = hw.q[i].k;
     if (k === 'f') return x.split('\n').join('، ');
@@ -299,7 +326,7 @@ function send(hw) {
     return x;
   };
   const text = [
-    'واجب: ' + hw.t,
+    (hw.e ? 'اختبار: ' : 'واجب: ') + hw.t,
     'الطالب: ' + hw.n[s],
     '',
     ...a.map((x, i) => (i + 1) + ') ' + shown(x, i)),
@@ -316,7 +343,40 @@ function send(hw) {
 window.addEventListener('hashchange', () => location.reload());
 window.addEventListener('pageshow', (e) => { if (e.persisted) location.reload(); });
 
+function renderDraw(d) {
+  document.title = 'سحب بطاقة: ' + d.t;
+  $('d-org').textContent = d.o || '';
+  $('d-title').textContent = d.t;
+  $('d-name').textContent = (d.n && d.n[0]) || '';
+  const taken = new Set(d.u || []);
+  const grid = $('grid');
+  for (let i = 1; i <= d.k; i++) {
+    const b = document.createElement('button');
+    b.textContent = i;
+    b.disabled = taken.has(i);
+    b.addEventListener('click', () => {
+      if (!confirm('هل تختار البطاقة رقم ' + i + '؟')) return;
+      const text = [
+        'اخترت البطاقة رقم ' + i,
+        d.t,
+        (d.n && d.n[0]) || '',
+      ].join('\n');
+      const sent = $('d-sent');
+      sent.textContent = 'اخترت البطاقة رقم ' + i + '. أرسل الرسالة لمعلمك في واتساب.';
+      sent.hidden = false;
+      grid.querySelectorAll('button').forEach((x) => { x.disabled = true; });
+      location.href = 'https://wa.me/' + (d.p || '') + '?text=' + encodeURIComponent(text);
+    });
+    grid.append(b);
+  }
+  $('draw').hidden = false;
+}
+
 readHomework().then((hw) => {
+  if (hw.m === 'd') {
+    renderDraw(hw);
+    return;
+  }
   render(hw);
   $('form').hidden = false;
   $('bar').hidden = false;
